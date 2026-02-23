@@ -6,11 +6,6 @@
       "api": "https://360zy.com/api.php/provide/vod",
       "detail": ""
     },
-    "wolong": {
-      "api": "https://wolongzyw.com/api.php/provide/vod",
-      "name": "卧龙资源",
-      "detail": ""
-    },
     "src_2": {
       "name": "TV-如意资源",
       "api": "https://cj.rycjapi.com/api.php/provide/vod",
