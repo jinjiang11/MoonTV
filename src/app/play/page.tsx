@@ -9,6 +9,10 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
 
 import {
+  findActiveAdCandidate,
+  getAdSkipTarget,
+} from '@/lib/ad-detection/playback';
+import {
   analyzeHlsManifest,
   mergeAdCandidates,
 } from '@/lib/ad-detection/playlistAnalyzer';
@@ -101,6 +105,18 @@ function PlayPageClient() {
     blockAdEnabledRef.current = blockAdEnabled;
   }, [blockAdEnabled]);
 
+  // 自动跳过广告为独立的显式选项，默认关闭。
+  const [autoSkipAdsEnabled, setAutoSkipAdsEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('enable_ad_autoskip') === 'true';
+    }
+    return false;
+  });
+  const autoSkipAdsEnabledRef = useRef(autoSkipAdsEnabled);
+  useEffect(() => {
+    autoSkipAdsEnabledRef.current = autoSkipAdsEnabled;
+  }, [autoSkipAdsEnabled]);
+
   // 视频基本信息
   const [videoTitle, setVideoTitle] = useState(searchParams.get('title') || '');
   const [videoYear, setVideoYear] = useState(searchParams.get('year') || '');
@@ -154,12 +170,22 @@ function PlayPageClient() {
   // 视频播放地址
   const [videoUrl, setVideoUrl] = useState('');
 
-  // 检测到的疑似广告时间段（当前仅提示，不自动跳过）
+  // 检测到的疑似广告时间段
   const [adCandidates, setAdCandidates] = useState<AdCandidate[]>([]);
   const adCandidatesRef = useRef<AdCandidate[]>([]);
+  const skippedAdCandidatesRef = useRef<Set<string>>(new Set());
+  // Map value records whether playback has entered the bypassed range.
+  const bypassedAdCandidatesRef = useRef<Map<string, boolean>>(new Map());
+  const [lastSkippedAd, setLastSkippedAd] = useState<{
+    candidate: AdCandidate;
+    from: number;
+  } | null>(null);
   useEffect(() => {
     adCandidatesRef.current = [];
+    skippedAdCandidatesRef.current.clear();
+    bypassedAdCandidatesRef.current.clear();
     setAdCandidates([]);
+    setLastSkippedAd(null);
   }, [videoUrl]);
 
   // 总集数
@@ -508,7 +534,7 @@ function PlayPageClient() {
     }
   };
 
-  // 广告检测相关函数。检测结果只用于提示，绝不修改播放列表。
+  // 广告检测相关函数。检测和跳过都不修改原始播放列表。
   function registerAdCandidates(incoming: AdCandidate[], manifestUrl?: string) {
     if (incoming.length === 0) return;
 
@@ -537,8 +563,38 @@ function PlayPageClient() {
     });
 
     if (newCandidateCount > 0 && artPlayerRef.current?.notice) {
-      artPlayerRef.current.notice.show = `检测到 ${newCandidateCount} 个疑似广告时间段（仅提示）`;
+      artPlayerRef.current.notice.show = `检测到 ${newCandidateCount} 个疑似广告时间段`;
     }
+  }
+
+  function skipAdCandidate(
+    candidate: AdCandidate,
+    mode: 'automatic' | 'manual'
+  ) {
+    const player = artPlayerRef.current;
+    if (!player) return;
+
+    const from = Number(player.currentTime) || 0;
+    const target = getAdSkipTarget(candidate, Number(player.duration) || 0);
+    if (target <= from) return;
+
+    skippedAdCandidatesRef.current.add(candidate.id);
+    player.currentTime = target;
+    setLastSkippedAd({ candidate, from });
+    player.notice.show = `${
+      mode === 'automatic' ? '已自动跳过' : '已跳过'
+    }广告 (${formatTime(candidate.start)} – ${formatTime(candidate.end)})`;
+  }
+
+  function undoLastAdSkip() {
+    const player = artPlayerRef.current;
+    if (!player || !lastSkippedAd) return;
+
+    skippedAdCandidatesRef.current.delete(lastSkippedAd.candidate.id);
+    bypassedAdCandidatesRef.current.set(lastSkippedAd.candidate.id, false);
+    player.currentTime = Math.max(0, lastSkippedAd.from);
+    player.notice.show = '已恢复到跳过前的位置';
+    setLastSkippedAd(null);
   }
 
   // 跳过片头片尾配置相关函数
@@ -1409,7 +1465,7 @@ function PlayPageClient() {
         },
         settings: [
           {
-            html: '广告检测（仅提示）',
+            html: '广告检测',
             icon: '<text x="50%" y="50%" font-size="20" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="#ffffff">AD</text>',
             tooltip: blockAdEnabled ? '检测中' : '已关闭',
             onClick() {
@@ -1427,11 +1483,37 @@ function PlayPageClient() {
                   artPlayerRef.current.destroy();
                   artPlayerRef.current = null;
                 }
+                if (!newVal) {
+                  localStorage.setItem('enable_ad_autoskip', 'false');
+                  autoSkipAdsEnabledRef.current = false;
+                  setAutoSkipAdsEnabled(false);
+                }
                 setBlockAdEnabled(newVal);
               } catch (_) {
                 // ignore
               }
               return newVal ? '广告检测已开启' : '广告检测已关闭';
+            },
+          },
+          {
+            name: '自动跳过广告',
+            html: '自动跳过广告',
+            switch: autoSkipAdsEnabled,
+            tooltip: autoSkipAdsEnabled ? '已开启' : '已关闭',
+            onSwitch: function (item) {
+              if (!blockAdEnabledRef.current) {
+                artPlayerRef.current.notice.show = '请先开启广告检测';
+                return false;
+              }
+
+              const newVal = !item.switch;
+              localStorage.setItem('enable_ad_autoskip', String(newVal));
+              autoSkipAdsEnabledRef.current = newVal;
+              setAutoSkipAdsEnabled(newVal);
+              artPlayerRef.current.notice.show = newVal
+                ? '自动跳过广告已开启'
+                : '自动跳过广告已关闭';
+              return newVal;
             },
           },
           {
@@ -1592,11 +1674,60 @@ function PlayPageClient() {
         setIsVideoLoading(false);
       });
 
-      // 监听视频时间更新事件，实现跳过片头片尾
+      // 监听视频时间更新事件，实现广告、片头和片尾跳过。
       artPlayerRef.current.on('video:timeupdate', () => {
+        const currentTime = artPlayerRef.current.currentTime || 0;
+
+        // 离开广告范围后清理一次性保护，以便用户稍后重新回看时仍可跳过。
+        for (const candidateId of Array.from(skippedAdCandidatesRef.current)) {
+          const candidate = adCandidatesRef.current.find(
+            (item) => item.id === candidateId
+          );
+          if (
+            !candidate ||
+            currentTime < candidate.start ||
+            currentTime >= candidate.end
+          ) {
+            skippedAdCandidatesRef.current.delete(candidateId);
+          }
+        }
+
+        // 撤销后允许用户看完当前广告；离开范围后恢复自动跳过。
+        for (const [candidateId, hasEnteredRange] of Array.from(
+          bypassedAdCandidatesRef.current.entries()
+        )) {
+          const candidate = adCandidatesRef.current.find(
+            (item) => item.id === candidateId
+          );
+          if (!candidate) {
+            bypassedAdCandidatesRef.current.delete(candidateId);
+          } else if (
+            currentTime >= candidate.start &&
+            currentTime < candidate.end
+          ) {
+            bypassedAdCandidatesRef.current.set(candidateId, true);
+          } else if (hasEnteredRange && currentTime >= candidate.end) {
+            bypassedAdCandidatesRef.current.delete(candidateId);
+          }
+        }
+
+        if (autoSkipAdsEnabledRef.current) {
+          const candidate = findActiveAdCandidate(
+            adCandidatesRef.current,
+            currentTime
+          );
+          if (
+            candidate &&
+            !skippedAdCandidatesRef.current.has(candidate.id) &&
+            !bypassedAdCandidatesRef.current.has(candidate.id)
+          ) {
+            skipAdCandidate(candidate, 'automatic');
+            return;
+          }
+        }
+
         if (!skipConfigRef.current.enable) return;
 
-        const currentTime = artPlayerRef.current.currentTime || 0;
         const duration = artPlayerRef.current.duration || 0;
         const now = Date.now();
 
@@ -1946,7 +2077,9 @@ function PlayPageClient() {
                       </summary>
                       <div className='max-h-44 space-y-2 overflow-y-auto border-t border-white/15 px-3 py-2'>
                         <p className='text-white/70'>
-                          当前仅检测和提示，不会自动跳过视频。
+                          {autoSkipAdsEnabled
+                            ? '自动跳过已开启；播放时会直接跳到广告结束。'
+                            : '可手动跳过，或在播放器设置中开启自动跳过。'}
                         </p>
                         {adCandidates.map((candidate) => (
                           <div
@@ -1963,11 +2096,33 @@ function PlayPageClient() {
                                 .map((evidence) => evidence.message)
                                 .join('；')}
                             </div>
+                            <button
+                              type='button'
+                              onClick={() =>
+                                skipAdCandidate(candidate, 'manual')
+                              }
+                              className='mt-2 rounded bg-amber-500 px-2 py-1 font-medium text-black transition-colors hover:bg-amber-400'
+                            >
+                              跳到广告结束
+                            </button>
                           </div>
                         ))}
                       </div>
                     </details>
                   )}
+
+                {lastSkippedAd && !isVideoLoading && (
+                  <div className='absolute bottom-14 left-3 z-[450] flex items-center gap-2 rounded-lg bg-black/80 px-3 py-2 text-xs text-white shadow-lg backdrop-blur-sm'>
+                    <span>已跳过检测到的广告</span>
+                    <button
+                      type='button'
+                      onClick={undoLastAdSkip}
+                      className='rounded bg-white/15 px-2 py-1 font-medium text-amber-300 transition-colors hover:bg-white/25'
+                    >
+                      撤销
+                    </button>
+                  </div>
+                )}
 
                 {/* 换源加载蒙层 */}
                 {isVideoLoading && (
