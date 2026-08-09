@@ -9,6 +9,11 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
 
 import {
+  analyzeHlsManifest,
+  mergeAdCandidates,
+} from '@/lib/ad-detection/playlistAnalyzer';
+import { AdCandidate } from '@/lib/ad-detection/types';
+import {
   deleteFavorite,
   deletePlayRecord,
   deleteSkipConfig,
@@ -148,6 +153,14 @@ function PlayPageClient() {
 
   // 视频播放地址
   const [videoUrl, setVideoUrl] = useState('');
+
+  // 检测到的疑似广告时间段（当前仅提示，不自动跳过）
+  const [adCandidates, setAdCandidates] = useState<AdCandidate[]>([]);
+  const adCandidatesRef = useRef<AdCandidate[]>([]);
+  useEffect(() => {
+    adCandidatesRef.current = [];
+    setAdCandidates([]);
+  }, [videoUrl]);
 
   // 总集数
   const totalEpisodes = detail?.episodes?.length || 0;
@@ -495,24 +508,37 @@ function PlayPageClient() {
     }
   };
 
-  // 去广告相关函数
-  function filterAdsFromM3U8(m3u8Content: string): string {
-    if (!m3u8Content) return '';
+  // 广告检测相关函数。检测结果只用于提示，绝不修改播放列表。
+  function registerAdCandidates(incoming: AdCandidate[], manifestUrl?: string) {
+    if (incoming.length === 0) return;
 
-    // 按行分割M3U8内容
-    const lines = m3u8Content.split('\n');
-    const filteredLines = [];
+    const merged = mergeAdCandidates(adCandidatesRef.current, incoming);
+    const previousSignature = adCandidatesRef.current
+      .map((candidate) => `${candidate.id}:${candidate.confidence}`)
+      .join('|');
+    const nextSignature = merged
+      .map((candidate) => `${candidate.id}:${candidate.confidence}`)
+      .join('|');
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+    if (previousSignature === nextSignature) return;
 
-      // 只过滤#EXT-X-DISCONTINUITY标识
-      if (!line.includes('#EXT-X-DISCONTINUITY')) {
-        filteredLines.push(line);
-      }
+    const previousIds = new Set(
+      adCandidatesRef.current.map((candidate) => candidate.id)
+    );
+    const newCandidateCount = merged.filter(
+      (candidate) => !previousIds.has(candidate.id)
+    ).length;
+
+    adCandidatesRef.current = merged;
+    setAdCandidates(merged);
+    console.info('[广告检测] 发现疑似广告时间段:', {
+      manifestUrl,
+      candidates: merged,
+    });
+
+    if (newCandidateCount > 0 && artPlayerRef.current?.notice) {
+      artPlayerRef.current.notice.show = `检测到 ${newCandidateCount} 个疑似广告时间段（仅提示）`;
     }
-
-    return filteredLines.join('\n');
   }
 
   // 跳过片头片尾配置相关函数
@@ -633,10 +659,10 @@ function PlayPageClient() {
             stats: any,
             context: any
           ) {
-            // 如果是m3u8文件，处理内容以移除广告分段
+            // 分析原始 m3u8 内容，但不修改响应或删除任何媒体分段。
             if (response.data && typeof response.data === 'string') {
-              // 过滤掉广告段 - 实现更精确的广告过滤逻辑
-              response.data = filterAdsFromM3U8(response.data);
+              const analysis = analyzeHlsManifest(response.data, context?.url);
+              registerAdCandidates(analysis.candidates, analysis.manifestUrl);
             }
             return onSuccess(response, stats, context, null);
           };
@@ -1383,9 +1409,9 @@ function PlayPageClient() {
         },
         settings: [
           {
-            html: '去广告',
+            html: '广告检测（仅提示）',
             icon: '<text x="50%" y="50%" font-size="20" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="#ffffff">AD</text>',
-            tooltip: blockAdEnabled ? '已开启' : '已关闭',
+            tooltip: blockAdEnabled ? '检测中' : '已关闭',
             onClick() {
               const newVal = !blockAdEnabled;
               try {
@@ -1405,7 +1431,7 @@ function PlayPageClient() {
               } catch (_) {
                 // ignore
               }
-              return newVal ? '当前开启' : '当前关闭';
+              return newVal ? '广告检测已开启' : '广告检测已关闭';
             },
           },
           {
@@ -1910,6 +1936,38 @@ function PlayPageClient() {
                   ref={artRef}
                   className='bg-black w-full h-full rounded-xl overflow-hidden shadow-lg'
                 ></div>
+
+                {blockAdEnabled &&
+                  adCandidates.length > 0 &&
+                  !isVideoLoading && (
+                    <details className='absolute top-3 right-3 z-[450] max-w-[min(24rem,calc(100%-1.5rem))] rounded-lg bg-black/80 text-white text-xs shadow-lg backdrop-blur-sm'>
+                      <summary className='cursor-pointer select-none px-3 py-2 font-medium text-amber-300'>
+                        广告检测：发现 {adCandidates.length} 个疑似时间段
+                      </summary>
+                      <div className='max-h-44 space-y-2 overflow-y-auto border-t border-white/15 px-3 py-2'>
+                        <p className='text-white/70'>
+                          当前仅检测和提示，不会自动跳过视频。
+                        </p>
+                        {adCandidates.map((candidate) => (
+                          <div
+                            key={candidate.id}
+                            className='rounded bg-white/10 p-2'
+                          >
+                            <div className='font-medium'>
+                              {formatTime(candidate.start)} –{' '}
+                              {formatTime(candidate.end)} · 置信度{' '}
+                              {Math.round(candidate.confidence * 100)}%
+                            </div>
+                            <div className='mt-1 text-white/60'>
+                              {candidate.evidence
+                                .map((evidence) => evidence.message)
+                                .join('；')}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
 
                 {/* 换源加载蒙层 */}
                 {isVideoLoading && (
