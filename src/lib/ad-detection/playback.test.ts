@@ -1,6 +1,8 @@
 import {
+  AUTO_SKIP_LEAD_TIME_SECONDS,
   findActiveAdCandidate,
   getAdSkipTarget,
+  getAdSkipWindowStart,
   MIN_AUTO_SKIP_CONFIDENCE,
 } from './playback';
 import { AdCandidate } from './types';
@@ -19,12 +21,19 @@ function candidate(overrides: Partial<AdCandidate> = {}): AdCandidate {
 }
 
 describe('ad playback helpers', () => {
-  it('matches the start of a range but not its end', () => {
+  it('matches one second before a range but not earlier or at its end', () => {
     const ad = candidate();
 
+    expect(AUTO_SKIP_LEAD_TIME_SECONDS).toBe(1);
+    expect(findActiveAdCandidate([ad], 8.999)).toBeNull();
+    expect(findActiveAdCandidate([ad], 9)).toBe(ad);
     expect(findActiveAdCandidate([ad], 10)).toBe(ad);
     expect(findActiveAdCandidate([ad], 19.999)).toBe(ad);
     expect(findActiveAdCandidate([ad], 20)).toBeNull();
+  });
+
+  it('clamps the lead window to the beginning of the video', () => {
+    expect(getAdSkipWindowStart(candidate({ start: 0.5 }))).toBe(0);
   });
 
   it('ignores candidates below the requested confidence', () => {

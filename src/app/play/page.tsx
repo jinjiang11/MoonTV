@@ -11,6 +11,7 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import {
   findActiveAdCandidate,
   getAdSkipTarget,
+  getAdSkipWindowStart,
 } from '@/lib/ad-detection/playback';
 import {
   analyzeHlsManifest,
@@ -1702,7 +1703,7 @@ function PlayPageClient() {
           if (!candidate) {
             bypassedAdCandidatesRef.current.delete(candidateId);
           } else if (
-            currentTime >= candidate.start &&
+            currentTime >= getAdSkipWindowStart(candidate) &&
             currentTime < candidate.end
           ) {
             bypassedAdCandidatesRef.current.set(candidateId, true);
