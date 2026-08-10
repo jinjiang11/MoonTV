@@ -27,14 +27,14 @@
       "detail": "https://jszyapi.com"
     },
     "src_6": {
-      "name": "茅台资源",
-      "api": "https://caiji.maotaizy.cc/api.php/provide/vod",
-      "detail": ""
+      "name": "iKun资源",
+      "api": "https://ikunzyapi.com/api.php/provide/vod",
+      "detail": "https://ikunzy.com"
     },
     "src_7": {
-      "name": "豆瓣资源",
-      "api": "https://dbzy.tv/api.php/provide/vod",
-      "detail": ""
+      "name": "爱奇艺资源",
+      "api": "https://iqiyizyapi.com/api.php/provide/vod",
+      "detail": "https://iqiyizyapi.com"
     },
     "src_8": {
       "name": "魔都资源",
@@ -65,16 +65,6 @@
       "name": "TV-速博资源",
       "api": "https://subocaiji.com/api.php/provide/vod",
       "detail": ""
-    },
-    "src_14": {
-      "name": "TV-金鹰点播",
-      "api": "https://jinyingzy.com/api.php/provide/vod",
-      "detail": "https://jinyingzy.com"
-    },
-    "src_15": {
-      "name": "TV-金鹰资源",
-      "api": "https://jyzyapi.com/api.php/provide/vod",
-      "detail": "https://jyzyapi.com"
     },
     "src_16": {
       "name": "TV-魔都动漫",

@@ -353,6 +353,7 @@ def remove_av_items(items):
 
 def filter_accessible(items):
     results = []
+    failed = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         futures = {pool.submit(is_accessible, it["api"]): it for it in items}
         for fut in as_completed(futures):
@@ -365,7 +366,9 @@ def filter_accessible(items):
                 ok = False
             if ok:
                 results.append(it)
-    return results
+            else:
+                failed.append(it)
+    return results, failed
 
 
 def dedupe_output_by_api(items):
@@ -397,6 +400,20 @@ def write_output(items, cache_time):
         json.dump(out, f, ensure_ascii=False, indent=2)
 
 
+def print_source_list(title, items):
+    print(f"\n{title} ({len(items)}):")
+    if not items:
+        print("  None")
+        return
+
+    items_sorted = sorted(
+        items,
+        key=lambda x: (0 if x.get("source") == "config" else 1, (x.get("name") or "").lower())
+    )
+    for idx, it in enumerate(items_sorted, start=1):
+        print(f"  {idx}. {it.get('name', '')} - {it.get('api', '')}")
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -423,13 +440,15 @@ def main():
     logger.info("After dedupe: %d items", len(merged))
     merged = remove_av_items(merged)
     logger.info("After AV- filter: %d items", len(merged))
-    merged = filter_accessible(merged)
+    merged, failed = filter_accessible(merged)
     logger.info("After search validation: %d accessible items", len(merged))
     merged = dedupe_output_by_api(merged)
     logger.info("After final api dedupe: %d items", len(merged))
     write_output(merged, cache_time)
 
     print(f"Merged {len(all_items)} items into {len(merged)} accessible unique items.")
+    print_source_list("Successful sources", merged)
+    print_source_list("Failed sources", failed)
     print(f"Output written to: {OUTPUT_FILE}")
 
 

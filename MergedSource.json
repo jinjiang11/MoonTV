@@ -2,79 +2,39 @@
   "cache_time": 7200,
   "api_site": {
     "src_1": {
+      "name": "360资源",
+      "api": "https://360zy.com/api.php/provide/vod",
+      "detail": ""
+    },
+    "src_2": {
       "name": "TV-如意资源",
       "api": "https://cj.rycjapi.com/api.php/provide/vod",
       "detail": ""
     },
-    "src_2": {
-      "name": "TV-新浪点播",
-      "api": "https://api.xinlangapi.com/xinlangapi.php/provide/vod",
-      "detail": "https://api.xinlangapi.com"
-    },
     "src_3": {
-      "name": "TV-红牛资源",
-      "api": "https://www.hongniuzy2.com/api.php/provide/vod",
-      "detail": "https://www.hongniuzy2.com"
-    },
-    "src_4": {
-      "name": "TV-虎牙资源",
-      "api": "https://www.huyaapi.com/api.php/provide/vod",
-      "detail": "https://www.huyaapi.com"
-    },
-    "src_5": {
-      "name": "TV-速博资源",
-      "api": "https://subocaiji.com/api.php/provide/vod",
-      "detail": ""
-    },
-    "src_6": {
-      "name": "TV-金鹰资源",
-      "api": "https://jyzyapi.com/api.php/provide/vod",
-      "detail": "https://jyzyapi.com"
-    },
-    "src_7": {
       "name": "TV-魔都动漫",
       "api": "https://caiji.moduapi.cc/api.php/provide/vod",
       "detail": "https://caiji.moduapi.cc"
     },
-    "src_8": {
+    "src_4": {
       "name": "极速资源",
       "api": "https://jszyapi.com/api.php/provide/vod",
       "detail": "https://jszyapi.com"
     },
-    "src_9": {
-      "name": "红牛资源",
-      "api": "https://www.hongniuzy3.com/api.php/provide/vod",
-      "detail": ""
-    },
-    "src_10": {
-      "name": "金鹰资源采集网",
-      "api": "https://jyzyapi.com/provide/vod",
-      "detail": ""
-    },
-    "src_11": {
+    "src_5": {
       "name": "魔都资源",
       "api": "https://www.mdzyapi.com/api.php/provide/vod",
       "detail": ""
     },
-    "src_12": {
+    "src_6": {
       "name": "iKun资源",
       "api": "https://ikunzyapi.com/api.php/provide/vod",
       "detail": "https://ikunzy.com"
     },
-    "src_13": {
-      "name": "光速资源",
-      "api": "https://api.guangsuapi.com/api.php/provide/vod",
-      "detail": "https://api.guangsuapi.com"
-    },
-    "src_14": {
+    "src_7": {
       "name": "爱奇艺资源",
       "api": "https://iqiyizyapi.com/api.php/provide/vod",
       "detail": "https://iqiyizyapi.com"
-    },
-    "src_15": {
-      "name": "豪华资源",
-      "api": "https://hhzyapi.com/api.php/provide/vod",
-      "detail": "https://hhzyapi.com"
     }
   }
 }
