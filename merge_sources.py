@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import ssl
@@ -383,7 +384,7 @@ def dedupe_output_by_api(items):
     return list(unique.values())
 
 
-def write_output(items, cache_time):
+def write_output(items, cache_time, output_file):
     items_sorted = sorted(
         items,
         key=lambda x: (0 if x.get("source") == "config" else 1, (x.get("name") or "").lower())
@@ -396,7 +397,7 @@ def write_output(items, cache_time):
             "detail": it.get("detail", "")
         }
     out = {"cache_time": cache_time, "api_site": api_site}
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
 
@@ -414,15 +415,44 @@ def print_source_list(title, items):
         print(f"  {idx}. {it.get('name', '')} - {it.get('api', '')}")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Merge, dedupe, and validate MoonTV source JSON files."
+    )
+    parser.add_argument(
+        "inputs",
+        nargs="*",
+        help="Input JSON files. Defaults to config.json and NewSource.json.",
+    )
+    parser.add_argument(
+        "-i",
+        "--input",
+        action="append",
+        dest="input_files",
+        help="Input JSON file. Can be used multiple times.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default=OUTPUT_FILE,
+        help="Output JSON file. Defaults to MergedSource.json.",
+    )
+    args = parser.parse_args()
+    input_files = args.input_files or args.inputs or INPUT_FILES
+    return [os.path.abspath(p) for p in input_files], os.path.abspath(args.output)
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s"
     )
 
+    input_files, output_file = parse_args()
+
     all_items = []
     cache_time = None
-    for p in INPUT_FILES:
+    for p in input_files:
         if not os.path.exists(p):
             logger.warning("Input file not found: %s", p)
             continue
@@ -444,12 +474,12 @@ def main():
     logger.info("After search validation: %d accessible items", len(merged))
     merged = dedupe_output_by_api(merged)
     logger.info("After final api dedupe: %d items", len(merged))
-    write_output(merged, cache_time)
+    write_output(merged, cache_time, output_file)
 
     print(f"Merged {len(all_items)} items into {len(merged)} accessible unique items.")
     print_source_list("Successful sources", merged)
     print_source_list("Failed sources", failed)
-    print(f"Output written to: {OUTPUT_FILE}")
+    print(f"Output written to: {output_file}")
 
 
 if __name__ == "__main__":
