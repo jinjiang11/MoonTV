@@ -32,3 +32,21 @@ export function parseVodPlayEpisodes(vodPlayUrl?: string): ParsedEpisodeList {
 
   return { episodes, episodeNames };
 }
+
+/**
+ * Search responses can contain several play sources. Keep the source with the
+ * most valid episodes while preserving the label paired with every URL.
+ */
+export function parseBestVodPlayEpisodes(
+  vodPlayUrl?: string
+): ParsedEpisodeList {
+  if (!vodPlayUrl) return { episodes: [], episodeNames: [] };
+
+  return vodPlayUrl.split('$$$').reduce<ParsedEpisodeList>(
+    (best, source) => {
+      const parsed = parseVodPlayEpisodes(source);
+      return parsed.episodes.length > best.episodes.length ? parsed : best;
+    },
+    { episodes: [], episodeNames: [] }
+  );
+}

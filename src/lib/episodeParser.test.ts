@@ -1,4 +1,7 @@
-import { parseVodPlayEpisodes } from './episodeParser';
+import {
+  parseBestVodPlayEpisodes,
+  parseVodPlayEpisodes,
+} from './episodeParser';
 
 describe('parseVodPlayEpisodes', () => {
   it('preserves names and URLs from the first play source', () => {
@@ -39,6 +42,22 @@ describe('parseVodPlayEpisodes', () => {
     expect(parseVodPlayEpisodes()).toEqual({
       episodes: [],
       episodeNames: [],
+    });
+  });
+});
+
+describe('parseBestVodPlayEpisodes', () => {
+  it('keeps names from the play source with the most valid episodes', () => {
+    const result = parseBestVodPlayEpisodes(
+      '正片$https://first.example/1.m3u8$$$第1集$https://second.example/1.m3u8#第2集$https://second.example/2.m3u8'
+    );
+
+    expect(result).toEqual({
+      episodes: [
+        'https://second.example/1.m3u8',
+        'https://second.example/2.m3u8',
+      ],
+      episodeNames: ['第1集', '第2集'],
     });
   });
 });

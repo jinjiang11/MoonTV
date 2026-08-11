@@ -1,5 +1,8 @@
 import { API_CONFIG, ApiSite, getConfig } from '@/lib/config';
-import { parseVodPlayEpisodes } from '@/lib/episodeParser';
+import {
+  parseBestVodPlayEpisodes,
+  parseVodPlayEpisodes,
+} from '@/lib/episodeParser';
 import { SearchResult } from '@/lib/types';
 import { cleanHtmlTags } from '@/lib/utils';
 
@@ -52,33 +55,16 @@ export async function searchFromApi(
     }
     // 处理第一页结果
     const results = data.list.map((item: ApiSearchItem) => {
-      let episodes: string[] = [];
-
-      // 使用正则表达式从 vod_play_url 提取 m3u8 链接
-      if (item.vod_play_url) {
-        const m3u8Regex = /\$(https?:\/\/[^"'\s]+?\.m3u8)/g;
-        // 先用 $$$ 分割
-        const vod_play_url_array = item.vod_play_url.split('$$$');
-        // 对每个分片做匹配，取匹配到最多的作为结果
-        vod_play_url_array.forEach((url: string) => {
-          const matches = url.match(m3u8Regex) || [];
-          if (matches.length > episodes.length) {
-            episodes = matches;
-          }
-        });
-      }
-
-      episodes = Array.from(new Set(episodes)).map((link: string) => {
-        link = link.substring(1); // 去掉开头的 $
-        const parenIndex = link.indexOf('(');
-        return parenIndex > 0 ? link.substring(0, parenIndex) : link;
-      });
+      const { episodes, episodeNames } = parseBestVodPlayEpisodes(
+        item.vod_play_url
+      );
 
       return {
         id: item.vod_id.toString(),
         title: item.vod_name.trim().replace(/\s+/g, ' '),
         poster: item.vod_pic,
         episodes,
+        episode_names: episodeNames,
         source: apiSite.key,
         source_name: apiName,
         class: item.vod_class,
@@ -133,25 +119,16 @@ export async function searchFromApi(
               return [];
 
             return pageData.list.map((item: ApiSearchItem) => {
-              let episodes: string[] = [];
-
-              // 使用正则表达式从 vod_play_url 提取 m3u8 链接
-              if (item.vod_play_url) {
-                const m3u8Regex = /\$(https?:\/\/[^"'\s]+?\.m3u8)/g;
-                episodes = item.vod_play_url.match(m3u8Regex) || [];
-              }
-
-              episodes = Array.from(new Set(episodes)).map((link: string) => {
-                link = link.substring(1); // 去掉开头的 $
-                const parenIndex = link.indexOf('(');
-                return parenIndex > 0 ? link.substring(0, parenIndex) : link;
-              });
+              const { episodes, episodeNames } = parseBestVodPlayEpisodes(
+                item.vod_play_url
+              );
 
               return {
                 id: item.vod_id.toString(),
                 title: item.vod_name.trim().replace(/\s+/g, ' '),
                 poster: item.vod_pic,
                 episodes,
+                episode_names: episodeNames,
                 source: apiSite.key,
                 source_name: apiName,
                 class: item.vod_class,
