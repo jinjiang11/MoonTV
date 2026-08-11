@@ -394,7 +394,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
           </div>
 
           {/* 集数网格 */}
-          <div className='grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] auto-rows-[40px] gap-x-3 gap-y-3 overflow-y-auto h-full pb-4'>
+          <div className='flex h-full flex-wrap content-start gap-3 overflow-y-auto pb-4'>
             {(() => {
               const len = currentEnd - currentStart + 1;
               const episodes = Array.from({ length: len }, (_, i) =>
@@ -411,16 +411,14 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                   onClick={() => handleEpisodeClick(episodeNumber - 1)}
                   title={episodeName || `第 ${episodeNumber} 集`}
                   aria-label={`播放${episodeName || `第 ${episodeNumber} 集`}`}
-                  className={`h-10 min-w-0 px-2 flex items-center justify-center text-sm font-medium rounded-md transition-all duration-200
+                  className={`min-h-10 min-w-[72px] max-w-full flex-none px-3 py-2 flex items-center justify-center text-sm font-medium rounded-md transition-all duration-200
                     ${
                       isActive
                         ? 'bg-green-500 text-white shadow-lg shadow-green-500/25 dark:bg-green-600'
                         : 'bg-gray-200 text-gray-700 hover:bg-gray-300 hover:scale-105 dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20'
                     }`.trim()}
                 >
-                  <span className='w-full truncate text-center'>
-                    {displayName}
-                  </span>
+                  <span className='break-words text-center'>{displayName}</span>
                 </button>
               );
             })}
