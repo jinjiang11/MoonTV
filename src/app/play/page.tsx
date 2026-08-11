@@ -2175,6 +2175,7 @@ function PlayPageClient() {
             >
               <EpisodeSelector
                 totalEpisodes={totalEpisodes}
+                episodeNames={detail?.episode_names}
                 value={currentEpisodeIndex + 1}
                 onChange={handleEpisodeChange}
                 onSourceChange={handleSourceChange}
