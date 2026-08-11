@@ -1,4 +1,5 @@
 import { API_CONFIG, ApiSite, getConfig } from '@/lib/config';
+import { parseVodPlayEpisodes } from '@/lib/episodeParser';
 import { SearchResult } from '@/lib/types';
 import { cleanHtmlTags } from '@/lib/utils';
 
@@ -227,23 +228,13 @@ export async function getDetailFromApi(
 
   const videoDetail = data.list[0];
   let episodes: string[] = [];
+  let episodeNames: string[] = [];
 
   // 处理播放源拆分
   if (videoDetail.vod_play_url) {
-    const playSources = videoDetail.vod_play_url.split('$$$');
-    if (playSources.length > 0) {
-      const mainSource = playSources[0];
-      const episodeList = mainSource.split('#');
-      episodes = episodeList
-        .map((ep: string) => {
-          const parts = ep.split('$');
-          return parts.length > 1 ? parts[1] : '';
-        })
-        .filter(
-          (url: string) =>
-            url && (url.startsWith('http://') || url.startsWith('https://'))
-        );
-    }
+    const parsedEpisodes = parseVodPlayEpisodes(videoDetail.vod_play_url);
+    episodes = parsedEpisodes.episodes;
+    episodeNames = parsedEpisodes.episodeNames;
   }
 
   // 如果播放源为空，则尝试从内容中解析 m3u8
@@ -257,6 +248,8 @@ export async function getDetailFromApi(
     title: videoDetail.vod_name,
     poster: videoDetail.vod_pic,
     episodes,
+    episode_names:
+      episodeNames.length === episodes.length ? episodeNames : undefined,
     source: apiSite.key,
     source_name: apiSite.name,
     class: videoDetail.vod_class,
