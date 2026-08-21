@@ -8,6 +8,7 @@ import { Heart } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
 
+import { FragmentTrackAnalyzer } from '@/lib/ad-detection/fragmentAnalyzer';
 import {
   findActiveAdCandidate,
   getAdSkipTarget,
@@ -1432,6 +1433,33 @@ function PlayPageClient() {
                 ? CustomHlsJsLoader
                 : Hls.DefaultConfig.loader,
             });
+
+            const fragmentTrackAnalyzer = new FragmentTrackAnalyzer();
+
+            hls.on(
+              Hls.Events.FRAG_PARSING_INIT_SEGMENT,
+              function (_event: any, data: any) {
+                const videoTrack = data?.tracks?.video;
+                const width = Number(videoTrack?.metadata?.width);
+                const height = Number(videoTrack?.metadata?.height);
+                const frag = data?.frag;
+                const start = Number(frag?.start);
+                const duration = Number(frag?.duration);
+
+                const candidate = fragmentTrackAnalyzer.observe({
+                  start,
+                  duration,
+                  width,
+                  height,
+                  uri: frag?.url,
+                  manifestUrl: frag?.baseurl,
+                });
+
+                if (candidate) {
+                  registerAdCandidates([candidate], candidate.manifestUrl);
+                }
+              }
+            );
 
             hls.loadSource(url);
             hls.attachMedia(video);
