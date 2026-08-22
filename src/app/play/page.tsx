@@ -42,6 +42,8 @@ import PageLayout from '@/components/PageLayout';
 declare global {
   interface HTMLVideoElement {
     hls?: any;
+    hlsProbe?: HTMLVideoElement;
+    hlsProbeCleanup?: () => void;
   }
 }
 
@@ -469,30 +471,22 @@ function PlayPageClient() {
     }
   };
 
-  const ensureAirPlaySource = (video: HTMLVideoElement | null, url: string) => {
-    if (!video || !url) return;
-    const sources = Array.from(video.getElementsByTagName('source'));
-    sources
-      .filter(
-        (source) =>
-          source.dataset.moontvAirplaySource === 'true' && source.src !== url
-      )
-      .forEach((source) => source.remove());
+  const cleanupVideoHls = (video: HTMLVideoElement | null) => {
+    if (!video) return;
 
-    let airPlaySource = sources.find((source) => source.src === url);
-    if (!airPlaySource) {
-      airPlaySource = document.createElement('source');
-      airPlaySource.src = url;
-      video.appendChild(airPlaySource);
+    video.hlsProbeCleanup?.();
+    video.hlsProbeCleanup = undefined;
+
+    if (video.hls) {
+      video.hls.destroy();
+      video.hls = undefined;
     }
-    airPlaySource.type = 'application/x-mpegURL';
-    airPlaySource.dataset.moontvAirplaySource = 'true';
 
-    // 始终允许远程播放（AirPlay / Cast）
-    video.disableRemotePlayback = false;
-    // 如果曾经有禁用属性，移除之
-    if (video.hasAttribute('disableRemotePlayback')) {
-      video.removeAttribute('disableRemotePlayback');
+    if (video.hlsProbe) {
+      video.hlsProbe.pause();
+      video.hlsProbe.removeAttribute('src');
+      video.hlsProbe.load();
+      video.hlsProbe = undefined;
     }
   };
 
@@ -527,9 +521,7 @@ function PlayPageClient() {
     if (artPlayerRef.current) {
       try {
         // 销毁 HLS 实例
-        if (artPlayerRef.current.video && artPlayerRef.current.video.hls) {
-          artPlayerRef.current.video.hls.destroy();
-        }
+        cleanupVideoHls(artPlayerRef.current.video as HTMLVideoElement);
 
         // 销毁 ArtPlayer 实例
         artPlayerRef.current.destroy();
@@ -1349,10 +1341,13 @@ function PlayPageClient() {
     }
     console.log(videoUrl);
 
-    // 检测是否为WebKit浏览器
+    // Safari 26 no longer reliably exposes older WebKit-only point conversion
+    // APIs, so identify Apple WebKit from the browser engine instead.
+    const userAgent =
+      typeof navigator !== 'undefined' ? navigator.userAgent : '';
     const isWebkit =
-      typeof window !== 'undefined' &&
-      typeof (window as any).webkitConvertPointFromNodeToPage === 'function';
+      /AppleWebKit/i.test(userAgent) &&
+      !/(Chrome|Chromium|Edg|OPR|SamsungBrowser)/i.test(userAgent);
 
     // 非WebKit浏览器且播放器已存在，使用switch方法切换
     if (!isWebkit && artPlayerRef.current) {
@@ -1416,8 +1411,33 @@ function PlayPageClient() {
               return;
             }
 
-            if (!Hls.isSupported()) {
-              if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            cleanupVideoHls(video);
+
+            const canPlayNativeHls = Boolean(
+              video.canPlayType('application/vnd.apple.mpegurl')
+            );
+            const useNativePlayback = isWebkit && canPlayNativeHls;
+            const canUseHlsForPlayback = Hls.isSupported();
+            const canUseHlsProbe =
+              canUseHlsForPlayback ||
+              (isWebkit &&
+                typeof Hls.isMSESupported === 'function' &&
+                Hls.isMSESupported());
+
+            if (useNativePlayback) {
+              // Native HLS is the only consistently reliable iPhone AirPlay
+              // source. Detection runs on an isolated Hls.js probe below.
+              video.disableRemotePlayback = false;
+              video.removeAttribute('disableRemotePlayback');
+              video.setAttribute('x-webkit-airplay', 'allow');
+              video.src = url;
+              video.load();
+
+              if (!blockAdEnabledRef.current || !canUseHlsProbe) {
+                return;
+              }
+            } else if (!canUseHlsForPlayback) {
+              if (canPlayNativeHls) {
                 video.src = url;
                 video.load();
               } else {
@@ -1426,14 +1446,26 @@ function PlayPageClient() {
               return;
             }
 
-            if (video.hls) {
-              video.hls.destroy();
+            const hlsMedia = useNativePlayback
+              ? document.createElement('video')
+              : video;
+
+            if (useNativePlayback) {
+              hlsMedia.muted = true;
+              hlsMedia.preload = 'auto';
+              hlsMedia.playsInline = true;
+              hlsMedia.disableRemotePlayback = true;
+              hlsMedia.setAttribute('disableRemotePlayback', '');
+              hlsMedia.setAttribute('x-webkit-airplay', 'deny');
+              video.hlsProbe = hlsMedia;
             }
+
             const hls = new Hls({
               debug: false, // 关闭日志
               enableWorker: true, // WebWorker 解码，降低主线程压力
               lowLatencyMode: true, // 开启低延迟 LL-HLS
               preferManagedMediaSource: true, // iOS 17.1+ 使用 MMS，保留 HLS.js 检测能力
+              startPosition: 0,
 
               /* 缓冲/内存相关 */
               maxBufferLength: 30, // 前向缓冲最大 30s，过大容易导致高延迟
@@ -1447,6 +1479,43 @@ function PlayPageClient() {
             });
 
             const fragmentTrackAnalyzer = new FragmentTrackAnalyzer();
+            let probeBaselineReady = !useNativePlayback;
+
+            const syncProbeToPlayback = () => {
+              if (!useNativePlayback || !probeBaselineReady) return;
+
+              const playbackTime = Number(video.currentTime);
+              const probeTime = Number(hlsMedia.currentTime);
+              if (
+                Number.isFinite(playbackTime) &&
+                playbackTime >= 0 &&
+                (!Number.isFinite(probeTime) ||
+                  Math.abs(probeTime - playbackTime) > 3)
+              ) {
+                try {
+                  hlsMedia.currentTime = playbackTime;
+                } catch (_) {
+                  // The probe will synchronize after its metadata is ready.
+                }
+              }
+            };
+
+            if (useNativePlayback) {
+              video.addEventListener('timeupdate', syncProbeToPlayback);
+              video.addEventListener('seeking', syncProbeToPlayback);
+              hlsMedia.addEventListener('loadedmetadata', syncProbeToPlayback);
+              video.hlsProbeCleanup = () => {
+                video.removeEventListener('timeupdate', syncProbeToPlayback);
+                video.removeEventListener('seeking', syncProbeToPlayback);
+                hlsMedia.removeEventListener(
+                  'loadedmetadata',
+                  syncProbeToPlayback
+                );
+              };
+              console.info(
+                '[广告检测] Safari 使用原生 HLS 播放和独立 Hls.js 探测器'
+              );
+            }
 
             hls.on(
               Hls.Events.FRAG_PARSING_INIT_SEGMENT,
@@ -1457,6 +1526,18 @@ function PlayPageClient() {
                 const frag = data?.frag;
                 const start = Number(frag?.start);
                 const duration = Number(frag?.duration);
+
+                if (
+                  useNativePlayback &&
+                  !probeBaselineReady &&
+                  Number.isFinite(width) &&
+                  width > 0 &&
+                  Number.isFinite(height) &&
+                  height > 0
+                ) {
+                  probeBaselineReady = true;
+                  syncProbeToPlayback();
+                }
 
                 const candidate = fragmentTrackAnalyzer.observe({
                   start,
@@ -1476,13 +1557,10 @@ function PlayPageClient() {
             video.hls = hls;
 
             hls.on(Hls.Events.MEDIA_ATTACHED, function () {
-              // Keep the original HLS URL after the MMS source so AirPlay can
-              // hand the stream to the receiver without bypassing HLS.js locally.
-              ensureAirPlaySource(video, url);
               hls.loadSource(url);
             });
 
-            hls.attachMedia(video);
+            hls.attachMedia(hlsMedia);
 
             hls.on(Hls.Events.ERROR, function (event: any, data: any) {
               console.error('HLS Error:', event, data);
@@ -1498,7 +1576,7 @@ function PlayPageClient() {
                     break;
                   default:
                     console.log('无法恢复的错误');
-                    hls.destroy();
+                    cleanupVideoHls(video);
                     break;
                 }
               }
@@ -1520,12 +1598,9 @@ function PlayPageClient() {
                 localStorage.setItem('enable_blockad', String(newVal));
                 if (artPlayerRef.current) {
                   resumeTimeRef.current = artPlayerRef.current.currentTime;
-                  if (
-                    artPlayerRef.current.video &&
-                    artPlayerRef.current.video.hls
-                  ) {
-                    artPlayerRef.current.video.hls.destroy();
-                  }
+                  cleanupVideoHls(
+                    artPlayerRef.current.video as HTMLVideoElement
+                  );
                   artPlayerRef.current.destroy();
                   artPlayerRef.current = null;
                 }
