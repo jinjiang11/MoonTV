@@ -469,17 +469,24 @@ function PlayPageClient() {
     }
   };
 
-  const ensureVideoSource = (video: HTMLVideoElement | null, url: string) => {
+  const ensureAirPlaySource = (video: HTMLVideoElement | null, url: string) => {
     if (!video || !url) return;
     const sources = Array.from(video.getElementsByTagName('source'));
-    const existed = sources.some((s) => s.src === url);
-    if (!existed) {
-      // 移除旧的 source，保持唯一
-      sources.forEach((s) => s.remove());
-      const sourceEl = document.createElement('source');
-      sourceEl.src = url;
-      video.appendChild(sourceEl);
+    sources
+      .filter(
+        (source) =>
+          source.dataset.moontvAirplaySource === 'true' && source.src !== url
+      )
+      .forEach((source) => source.remove());
+
+    let airPlaySource = sources.find((source) => source.src === url);
+    if (!airPlaySource) {
+      airPlaySource = document.createElement('source');
+      airPlaySource.src = url;
+      video.appendChild(airPlaySource);
     }
+    airPlaySource.type = 'application/x-mpegURL';
+    airPlaySource.dataset.moontvAirplaySource = 'true';
 
     // 始终允许远程播放（AirPlay / Cast）
     video.disableRemotePlayback = false;
@@ -1354,12 +1361,6 @@ function PlayPageClient() {
         currentEpisodeIndex + 1
       }集`;
       artPlayerRef.current.poster = videoCover;
-      if (artPlayerRef.current?.video) {
-        ensureVideoSource(
-          artPlayerRef.current.video as HTMLVideoElement,
-          videoUrl
-        );
-      }
       return;
     }
 
@@ -1415,6 +1416,16 @@ function PlayPageClient() {
               return;
             }
 
+            if (!Hls.isSupported()) {
+              if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = url;
+                video.load();
+              } else {
+                console.error('当前浏览器不支持 HLS 播放');
+              }
+              return;
+            }
+
             if (video.hls) {
               video.hls.destroy();
             }
@@ -1422,6 +1433,7 @@ function PlayPageClient() {
               debug: false, // 关闭日志
               enableWorker: true, // WebWorker 解码，降低主线程压力
               lowLatencyMode: true, // 开启低延迟 LL-HLS
+              preferManagedMediaSource: true, // iOS 17.1+ 使用 MMS，保留 HLS.js 检测能力
 
               /* 缓冲/内存相关 */
               maxBufferLength: 30, // 前向缓冲最大 30s，过大容易导致高延迟
@@ -1461,11 +1473,16 @@ function PlayPageClient() {
               }
             );
 
-            hls.loadSource(url);
-            hls.attachMedia(video);
             video.hls = hls;
 
-            ensureVideoSource(video, url);
+            hls.on(Hls.Events.MEDIA_ATTACHED, function () {
+              // Keep the original HLS URL after the MMS source so AirPlay can
+              // hand the stream to the receiver without bypassing HLS.js locally.
+              ensureAirPlaySource(video, url);
+              hls.loadSource(url);
+            });
+
+            hls.attachMedia(video);
 
             hls.on(Hls.Events.ERROR, function (event: any, data: any) {
               console.error('HLS Error:', event, data);
@@ -1832,13 +1849,6 @@ function PlayPageClient() {
       artPlayerRef.current.on('pause', () => {
         saveCurrentPlayProgress();
       });
-
-      if (artPlayerRef.current?.video) {
-        ensureVideoSource(
-          artPlayerRef.current.video as HTMLVideoElement,
-          videoUrl
-        );
-      }
     } catch (err) {
       console.error('创建播放器失败:', err);
       setError('播放器初始化失败');
