@@ -2,6 +2,7 @@ import { AdCandidate } from './types';
 
 export const MIN_AUTO_SKIP_CONFIDENCE = 0.5;
 export const AUTO_SKIP_LEAD_TIME_SECONDS = 1;
+export const SAFARI_AUTO_SKIP_LEAD_TIME_SECONDS = 3;
 
 export function getAdSkipWindowStart(
   candidate: AdCandidate,

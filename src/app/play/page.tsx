@@ -10,9 +10,11 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 
 import { FragmentTrackAnalyzer } from '@/lib/ad-detection/fragmentAnalyzer';
 import {
+  AUTO_SKIP_LEAD_TIME_SECONDS,
   findActiveAdCandidate,
   getAdSkipTarget,
   getAdSkipWindowStart,
+  SAFARI_AUTO_SKIP_LEAD_TIME_SECONDS,
 } from '@/lib/ad-detection/playback';
 import {
   analyzeHlsManifest,
@@ -117,6 +119,7 @@ function PlayPageClient() {
     return false;
   });
   const autoSkipAdsEnabledRef = useRef(autoSkipAdsEnabled);
+  const adSkipLeadTimeRef = useRef(AUTO_SKIP_LEAD_TIME_SECONDS);
   useEffect(() => {
     autoSkipAdsEnabledRef.current = autoSkipAdsEnabled;
   }, [autoSkipAdsEnabled]);
@@ -241,6 +244,7 @@ function PlayPageClient() {
 
   // 播放进度保存相关
   const saveIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const adSkipIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSaveTimeRef = useRef<number>(0);
 
   const artPlayerRef = useRef<any>(null);
@@ -518,6 +522,11 @@ function PlayPageClient() {
 
   // 清理播放器资源的统一函数
   const cleanupPlayer = () => {
+    if (adSkipIntervalRef.current) {
+      clearInterval(adSkipIntervalRef.current);
+      adSkipIntervalRef.current = null;
+    }
+
     if (artPlayerRef.current) {
       try {
         // 销毁 HLS 实例
@@ -566,6 +575,8 @@ function PlayPageClient() {
     if (newCandidateCount > 0 && artPlayerRef.current?.notice) {
       artPlayerRef.current.notice.show = `检测到 ${newCandidateCount} 个疑似广告时间段`;
     }
+
+    tryAutoSkipCurrentAd();
   }
 
   function skipAdCandidate(
@@ -585,6 +596,28 @@ function PlayPageClient() {
     player.notice.show = `${
       mode === 'automatic' ? '已自动跳过' : '已跳过'
     }广告 (${formatTime(candidate.start)} – ${formatTime(candidate.end)})`;
+  }
+
+  function tryAutoSkipCurrentAd(): boolean {
+    const player = artPlayerRef.current;
+    if (!player || !autoSkipAdsEnabledRef.current) return false;
+
+    const candidate = findActiveAdCandidate(
+      adCandidatesRef.current,
+      Number(player.currentTime) || 0,
+      undefined,
+      adSkipLeadTimeRef.current
+    );
+    if (
+      !candidate ||
+      skippedAdCandidatesRef.current.has(candidate.id) ||
+      bypassedAdCandidatesRef.current.has(candidate.id)
+    ) {
+      return false;
+    }
+
+    skipAdCandidate(candidate, 'automatic');
+    return true;
   }
 
   function undoLastAdSkip() {
@@ -1348,6 +1381,9 @@ function PlayPageClient() {
     const isWebkit =
       /AppleWebKit/i.test(userAgent) &&
       !/(Chrome|Chromium|Edg|OPR|SamsungBrowser)/i.test(userAgent);
+    adSkipLeadTimeRef.current = isWebkit
+      ? SAFARI_AUTO_SKIP_LEAD_TIME_SECONDS
+      : AUTO_SKIP_LEAD_TIME_SECONDS;
 
     // 非WebKit浏览器且播放器已存在，使用switch方法切换
     if (!isWebkit && artPlayerRef.current) {
@@ -1601,6 +1637,10 @@ function PlayPageClient() {
                   cleanupVideoHls(
                     artPlayerRef.current.video as HTMLVideoElement
                   );
+                  if (adSkipIntervalRef.current) {
+                    clearInterval(adSkipIntervalRef.current);
+                    adSkipIntervalRef.current = null;
+                  }
                   artPlayerRef.current.destroy();
                   artPlayerRef.current = null;
                 }
@@ -1806,7 +1846,8 @@ function PlayPageClient() {
           );
           if (
             !candidate ||
-            currentTime < candidate.start ||
+            currentTime <
+              getAdSkipWindowStart(candidate, adSkipLeadTimeRef.current) ||
             currentTime >= candidate.end
           ) {
             skippedAdCandidatesRef.current.delete(candidateId);
@@ -1823,7 +1864,8 @@ function PlayPageClient() {
           if (!candidate) {
             bypassedAdCandidatesRef.current.delete(candidateId);
           } else if (
-            currentTime >= getAdSkipWindowStart(candidate) &&
+            currentTime >=
+              getAdSkipWindowStart(candidate, adSkipLeadTimeRef.current) &&
             currentTime < candidate.end
           ) {
             bypassedAdCandidatesRef.current.set(candidateId, true);
@@ -1832,20 +1874,7 @@ function PlayPageClient() {
           }
         }
 
-        if (autoSkipAdsEnabledRef.current) {
-          const candidate = findActiveAdCandidate(
-            adCandidatesRef.current,
-            currentTime
-          );
-          if (
-            candidate &&
-            !skippedAdCandidatesRef.current.has(candidate.id) &&
-            !bypassedAdCandidatesRef.current.has(candidate.id)
-          ) {
-            skipAdCandidate(candidate, 'automatic');
-            return;
-          }
-        }
+        if (tryAutoSkipCurrentAd()) return;
 
         if (!skipConfigRef.current.enable) return;
 
@@ -1924,6 +1953,13 @@ function PlayPageClient() {
       artPlayerRef.current.on('pause', () => {
         saveCurrentPlayProgress();
       });
+
+      // Safari and AirPlay can throttle video:timeupdate for multiple seconds.
+      // Polling currentTime keeps the early skip window reliable.
+      if (adSkipIntervalRef.current) {
+        clearInterval(adSkipIntervalRef.current);
+      }
+      adSkipIntervalRef.current = setInterval(tryAutoSkipCurrentAd, 250);
     } catch (err) {
       console.error('创建播放器失败:', err);
       setError('播放器初始化失败');

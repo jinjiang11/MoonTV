@@ -4,6 +4,7 @@ import {
   getAdSkipTarget,
   getAdSkipWindowStart,
   MIN_AUTO_SKIP_CONFIDENCE,
+  SAFARI_AUTO_SKIP_LEAD_TIME_SECONDS,
 } from './playback';
 import { AdCandidate } from './types';
 
@@ -34,6 +35,20 @@ describe('ad playback helpers', () => {
 
   it('clamps the lead window to the beginning of the video', () => {
     expect(getAdSkipWindowStart(candidate({ start: 0.5 }))).toBe(0);
+  });
+
+  it('supports the larger Safari and AirPlay safety window', () => {
+    const ad = candidate();
+
+    expect(SAFARI_AUTO_SKIP_LEAD_TIME_SECONDS).toBe(3);
+    expect(
+      findActiveAdCandidate(
+        [ad],
+        7,
+        MIN_AUTO_SKIP_CONFIDENCE,
+        SAFARI_AUTO_SKIP_LEAD_TIME_SECONDS
+      )
+    ).toBe(ad);
   });
 
   it('ignores candidates below the requested confidence', () => {
