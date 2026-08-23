@@ -98,12 +98,160 @@ export function cleanHtmlTags(text: string): string {
  * @param m3u8Url m3u8播放列表的URL
  * @returns Promise<{quality: string, loadSpeed: string, pingTime: number}> 视频质量等级和网络信息
  */
-export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
+interface VideoResolutionInfo {
   quality: string; // 如720p、1080p等
   loadSpeed: string; // 自动转换为KB/s或MB/s
   pingTime: number; // 网络延迟（毫秒）
-}> {
+}
+
+export function getVideoQualityFromWidth(width: number): string {
+  return width >= 3840
+    ? '4K'
+    : width >= 2560
+    ? '2K'
+    : width >= 1920
+    ? '1080p'
+    : width >= 1280
+    ? '720p'
+    : width >= 854
+    ? '480p'
+    : 'SD';
+}
+
+export function getHighestHlsManifestWidth(manifest: string): number | null {
+  if (!manifest.includes('#EXTM3U')) return null;
+
+  let highestWidth = 0;
+  const resolutionPattern = /(?:^|,)\s*RESOLUTION\s*=\s*(\d+)x(\d+)/gim;
+  let match: RegExpExecArray | null;
+
+  while ((match = resolutionPattern.exec(manifest)) !== null) {
+    const width = Number(match[1]);
+    if (Number.isFinite(width) && width > highestWidth) {
+      highestWidth = width;
+    }
+  }
+
+  return highestWidth > 0 ? highestWidth : null;
+}
+
+function formatLoadSpeed(byteLength: number, elapsedMs: number): string {
+  if (byteLength <= 0 || elapsedMs <= 0) return '未知';
+
+  const speedKBps = byteLength / 1024 / (elapsedMs / 1000);
+  return speedKBps >= 1024
+    ? `${(speedKBps / 1024).toFixed(1)} MB/s`
+    : `${speedKBps.toFixed(1)} KB/s`;
+}
+
+function getVideoResolutionWithNativeHls(
+  m3u8Url: string
+): Promise<VideoResolutionInfo> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    const abortController = new AbortController();
+    const startedAt = performance.now();
+    let pingTime = 0;
+    let loadSpeed = '未知';
+    let settled = false;
+    let nativeWidth = 0;
+    let manifestRequestFinished = false;
+
+    video.muted = true;
+    video.preload = 'metadata';
+    video.playsInline = true;
+    video.disableRemotePlayback = true;
+    video.setAttribute('disableRemotePlayback', '');
+    video.setAttribute('x-webkit-airplay', 'deny');
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      abortController.abort();
+      video.removeAttribute('src');
+      video.load();
+      video.remove();
+    };
+
+    const finish = (width: number) => {
+      if (settled || !Number.isFinite(width) || width <= 0) return;
+      settled = true;
+      cleanup();
+      resolve({
+        quality: getVideoQualityFromWidth(width),
+        loadSpeed,
+        pingTime: Math.round(pingTime),
+      });
+    };
+
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('Timeout loading native HLS metadata'));
+    }, 5000);
+
+    video.onloadedmetadata = () => {
+      nativeWidth = video.videoWidth;
+      if (manifestRequestFinished) finish(nativeWidth);
+    };
+    video.onerror = () => {
+      // Playlist parsing can still provide a resolution after native metadata
+      // loading fails, so wait for it or the shared timeout.
+    };
+
+    fetch(m3u8Url, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: abortController.signal,
+    })
+      .then(async (response) => {
+        pingTime = performance.now() - startedAt;
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const manifest = await response.text();
+        const elapsedMs = performance.now() - startedAt;
+        loadSpeed = formatLoadSpeed(
+          new TextEncoder().encode(manifest).length,
+          elapsedMs
+        );
+        const manifestWidth = getHighestHlsManifestWidth(manifest);
+        manifestRequestFinished = true;
+        if (manifestWidth) {
+          finish(manifestWidth);
+        } else {
+          finish(nativeWidth);
+        }
+      })
+      .catch((error) => {
+        if (error instanceof Error && error.name === 'AbortError') return;
+        pingTime = performance.now() - startedAt;
+        manifestRequestFinished = true;
+        finish(nativeWidth);
+      });
+
+    video.src = m3u8Url;
+    video.load();
+  });
+}
+
+export async function getVideoResolutionFromM3u8(
+  m3u8Url: string
+): Promise<VideoResolutionInfo> {
   try {
+    const userAgent =
+      typeof navigator !== 'undefined' ? navigator.userAgent : '';
+    const isAppleWebKit =
+      /AppleWebKit/i.test(userAgent) &&
+      !/(Chrome|Chromium|Edg|OPR|SamsungBrowser)/i.test(userAgent);
+    const nativeHlsVideo = document.createElement('video');
+
+    if (
+      isAppleWebKit &&
+      nativeHlsVideo.canPlayType('application/vnd.apple.mpegurl')
+    ) {
+      return getVideoResolutionWithNativeHls(m3u8Url);
+    }
+
     // 直接使用m3u8 URL作为视频源，避免CORS问题
     return new Promise((resolve, reject) => {
       const video = document.createElement('video');
@@ -158,22 +306,8 @@ export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
             hls.destroy();
             video.remove();
 
-            // 根据视频宽度判断视频质量等级，使用经典分辨率的宽度作为分割点
-            const quality =
-              width >= 3840
-                ? '4K' // 4K: 3840x2160
-                : width >= 2560
-                ? '2K' // 2K: 2560x1440
-                : width >= 1920
-                ? '1080p' // 1080p: 1920x1080
-                : width >= 1280
-                ? '720p' // 720p: 1280x720
-                : width >= 854
-                ? '480p'
-                : 'SD'; // 480p: 854x480
-
             resolve({
-              quality,
+              quality: getVideoQualityFromWidth(width),
               loadSpeed: actualLoadSpeed,
               pingTime: Math.round(pingTime),
             });
