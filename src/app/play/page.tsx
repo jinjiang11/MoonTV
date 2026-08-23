@@ -180,8 +180,6 @@ function PlayPageClient() {
   // 检测到的疑似广告时间段
   const [adCandidates, setAdCandidates] = useState<AdCandidate[]>([]);
   const adCandidatesRef = useRef<AdCandidate[]>([]);
-  const resolutionDetectionDisabledRef = useRef(false);
-  const stopResolutionDetectionRef = useRef<(() => void) | null>(null);
   const skippedAdCandidatesRef = useRef<Set<string>>(new Set());
   // Map value records whether playback has entered the bypassed range.
   const bypassedAdCandidatesRef = useRef<Map<string, boolean>>(new Map());
@@ -191,8 +189,6 @@ function PlayPageClient() {
   } | null>(null);
   useEffect(() => {
     adCandidatesRef.current = [];
-    resolutionDetectionDisabledRef.current = false;
-    stopResolutionDetectionRef.current = null;
     skippedAdCandidatesRef.current.clear();
     bypassedAdCandidatesRef.current.clear();
     setAdCandidates([]);
@@ -482,7 +478,6 @@ function PlayPageClient() {
   const cleanupVideoHls = (video: HTMLVideoElement | null) => {
     if (!video) return;
 
-    stopResolutionDetectionRef.current = null;
     video.hlsProbeCleanup?.();
     video.hlsProbeCleanup = undefined;
 
@@ -625,16 +620,6 @@ function PlayPageClient() {
     return true;
   }
 
-  function disableResolutionChangeDetection(): void {
-    if (resolutionDetectionDisabledRef.current) return;
-
-    resolutionDetectionDisabledRef.current = true;
-    const stopResolutionDetection = stopResolutionDetectionRef.current;
-    stopResolutionDetectionRef.current = null;
-    stopResolutionDetection?.();
-    console.info('[广告检测] 播放列表已发现广告，已停止分辨率变化检测');
-  }
-
   function undoLastAdSkip() {
     const player = artPlayerRef.current;
     if (!player || !lastSkippedAd) return;
@@ -768,11 +753,6 @@ function PlayPageClient() {
             if (response.data && typeof response.data === 'string') {
               const analysis = analyzeHlsManifest(response.data, context?.url);
               registerAdCandidates(analysis.candidates, analysis.manifestUrl);
-              if (analysis.candidates.length > 0) {
-                // Let Hls.js finish handling this playlist response before a
-                // Safari-only probe is destroyed.
-                setTimeout(disableResolutionChangeDetection, 0);
-              }
             }
             return onSuccess(response, stats, context, null);
           };
@@ -1468,8 +1448,6 @@ function PlayPageClient() {
             }
 
             cleanupVideoHls(video);
-            resolutionDetectionDisabledRef.current = false;
-            stopResolutionDetectionRef.current = null;
 
             const canPlayNativeHls = Boolean(
               video.canPlayType('application/vnd.apple.mpegurl')
@@ -1575,55 +1553,42 @@ function PlayPageClient() {
               );
             }
 
-            const handleFragmentTrack = (_event: any, data: any) => {
-              if (resolutionDetectionDisabledRef.current) return;
+            hls.on(
+              Hls.Events.FRAG_PARSING_INIT_SEGMENT,
+              function (_event: any, data: any) {
+                const videoTrack = data?.tracks?.video;
+                const width = Number(videoTrack?.metadata?.width);
+                const height = Number(videoTrack?.metadata?.height);
+                const frag = data?.frag;
+                const start = Number(frag?.start);
+                const duration = Number(frag?.duration);
 
-              const videoTrack = data?.tracks?.video;
-              const width = Number(videoTrack?.metadata?.width);
-              const height = Number(videoTrack?.metadata?.height);
-              const frag = data?.frag;
-              const start = Number(frag?.start);
-              const duration = Number(frag?.duration);
+                if (
+                  useNativePlayback &&
+                  !probeBaselineReady &&
+                  Number.isFinite(width) &&
+                  width > 0 &&
+                  Number.isFinite(height) &&
+                  height > 0
+                ) {
+                  probeBaselineReady = true;
+                  syncProbeToPlayback();
+                }
 
-              if (
-                useNativePlayback &&
-                !probeBaselineReady &&
-                Number.isFinite(width) &&
-                width > 0 &&
-                Number.isFinite(height) &&
-                height > 0
-              ) {
-                probeBaselineReady = true;
-                syncProbeToPlayback();
+                const candidate = fragmentTrackAnalyzer.observe({
+                  start,
+                  duration,
+                  width,
+                  height,
+                  uri: frag?.url,
+                  manifestUrl: frag?.baseurl,
+                });
+
+                if (candidate) {
+                  registerAdCandidates([candidate], candidate.manifestUrl);
+                }
               }
-
-              const candidate = fragmentTrackAnalyzer.observe({
-                start,
-                duration,
-                width,
-                height,
-                uri: frag?.url,
-                manifestUrl: frag?.baseurl,
-              });
-
-              if (candidate) {
-                registerAdCandidates([candidate], candidate.manifestUrl);
-              }
-            };
-
-            hls.on(Hls.Events.FRAG_PARSING_INIT_SEGMENT, handleFragmentTrack);
-
-            stopResolutionDetectionRef.current = () => {
-              hls.off(
-                Hls.Events.FRAG_PARSING_INIT_SEGMENT,
-                handleFragmentTrack
-              );
-              fragmentTrackAnalyzer.reset();
-
-              if (useNativePlayback && video.hls === hls) {
-                cleanupVideoHls(video);
-              }
-            };
+            );
 
             video.hls = hls;
 
