@@ -8,6 +8,7 @@ import { Heart } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
 
+import { FragmentCodecAnalyzer } from '@/lib/ad-detection/codecAnalyzer';
 import { FragmentTrackAnalyzer } from '@/lib/ad-detection/fragmentAnalyzer';
 import {
   AUTO_SKIP_LEAD_TIME_SECONDS,
@@ -20,6 +21,7 @@ import {
   analyzeHlsManifest,
   mergeAdCandidates,
 } from '@/lib/ad-detection/playlistAnalyzer';
+import { extractH264CodecFingerprint } from '@/lib/ad-detection/transportStreamAnalyzer';
 import { AdCandidate } from '@/lib/ad-detection/types';
 import {
   deleteFavorite,
@@ -1514,8 +1516,38 @@ function PlayPageClient() {
                 : Hls.DefaultConfig.loader,
             });
 
+            const fragmentCodecAnalyzer = new FragmentCodecAnalyzer();
             const fragmentTrackAnalyzer = new FragmentTrackAnalyzer();
+            const observedCodecFragments = new Set<string>();
             let probeBaselineReady = !useNativePlayback;
+
+            const observeFragmentCodec = (data: any) => {
+              const frag = data?.frag;
+              if (!frag || (frag.type && frag.type !== 'main')) return;
+
+              const start = Number(frag.start);
+              const duration = Number(frag.duration);
+              const fingerprint = extractH264CodecFingerprint(data?.payload);
+              if (!fingerprint) return;
+
+              const observationKey = `${start}:${
+                frag.url || ''
+              }:${fingerprint}`;
+              if (observedCodecFragments.has(observationKey)) return;
+              observedCodecFragments.add(observationKey);
+
+              const candidate = fragmentCodecAnalyzer.observe({
+                start,
+                duration,
+                fingerprint,
+                uri: frag.url,
+                manifestUrl: frag.baseurl,
+              });
+
+              if (candidate) {
+                registerAdCandidates([candidate], candidate.manifestUrl);
+              }
+            };
 
             const syncProbeToPlayback = () => {
               if (!useNativePlayback || !probeBaselineReady) return;
@@ -1552,6 +1584,17 @@ function PlayPageClient() {
                 '[广告检测] Safari 使用原生 HLS 播放和独立 Hls.js 探测器'
               );
             }
+
+            hls.on(Hls.Events.FRAG_LOADED, function (_event: any, data: any) {
+              observeFragmentCodec(data);
+            });
+
+            hls.on(
+              Hls.Events.FRAG_DECRYPTED,
+              function (_event: any, data: any) {
+                observeFragmentCodec(data);
+              }
+            );
 
             hls.on(
               Hls.Events.FRAG_PARSING_INIT_SEGMENT,

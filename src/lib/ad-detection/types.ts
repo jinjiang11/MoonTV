@@ -7,7 +7,8 @@ export type AdEvidenceType =
   | 'key-switch'
   | 'map-switch'
   | 'uri-keyword'
-  | 'resolution-switch';
+  | 'resolution-switch'
+  | 'codec-switch';
 
 export interface AdEvidence {
   type: AdEvidenceType;
